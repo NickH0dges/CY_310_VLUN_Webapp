@@ -1,14 +1,21 @@
 import os
 import sqlite3
 import time
-from flask import Flask, request, render_template_string
+from flask import Flask, request, render_template_string, session, redirect, url_for
 
 DB_PATH = "vuln_demo.db"
 app = Flask(__name__)
 
-# ------------------------
-#   LOCKOUT SETTINGS
-# ------------------------
+# ======================================================
+# SESSION AND LOCKOUT SETTINGS
+# ======================================================
+
+# --- New Session Configuration ---
+# WARNING: In a real application, retrieve this from an environment variable!
+app.secret_key = os.urandom(24) 
+INACTIVITY_TIMEOUT = 900       # 15 minutes (15 * 60 seconds)
+
+# --- Lockout Settings (Existing) ---
 failed_attempts = {}     # { ip: count }
 lockout_until = {}       # { ip: timestamp }
 MAX_ATTEMPTS = 5
@@ -16,7 +23,7 @@ LOCKOUT_DURATION = 1800   # 30 minutes
 
 
 # ======================================================
-# DATABASE SETUP
+# DATABASE SETUP (Unchanged)
 # ======================================================
 def init_db():
     if os.path.exists(DB_PATH):
@@ -27,7 +34,7 @@ def init_db():
 
     # Users table (plaintext passwords — intentionally insecure)
     cur.execute("""
-        CREATE TABLE users (
+    CREATE TABLE users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL,
             password TEXT NOT NULL
@@ -69,7 +76,7 @@ def init_db():
 
 
 # ======================================================
-# SHARED CSS (unchanged)
+# SHARED CSS (Unchanged)
 # ======================================================
 BASE_CSS = """
 <style>
@@ -93,7 +100,7 @@ BASE_CSS = """
 """
 
 # ======================================================
-# HTML TEMPLATES (unchanged)
+# HTML TEMPLATES (Unchanged)
 # ======================================================
 LOGIN_PAGE = """
 <!doctype html>
@@ -147,13 +154,45 @@ DASHBOARD_PAGE = """
 </div></div></body></html>
 """
 
+# ======================================================
+# SESSION CHECK HELPER (New)
+# ======================================================
+def check_session_timeout():
+    """
+    Checks if the user session has timed out due to inactivity (15 mins).
+    If active, it updates the last_activity time.
+    """
+    now = time.time()
+    
+    # Check if the session is active and if the timeout limit is reached
+    if 'username' in session and (now - session.get('last_activity', now)) > INACTIVITY_TIMEOUT:
+        session.clear() # Clear the entire session data
+        return True
+    
+    # If the session is active and not timed out, update the last activity time
+    if 'username' in session:
+        session['last_activity'] = now
+    
+    return False
+
 
 # ======================================================
-# ROUTES (SQL injection fix + lockout)
+# ROUTES (Updated for Sessions and Timeout)
 # ======================================================
 @app.route("/", methods=["GET"])
 def index():
-    return render_template_string(LOGIN_PAGE)
+    if 'username' in session:
+        # Check if the user is already logged in and if the session has timed out
+        if check_session_timeout():
+            # If timed out, clear session and redirect to login with a message
+            return redirect(url_for('logout', timeout=1))
+        
+        # If not timed out, redirect to the dashboard
+        return redirect(url_for('dashboard')) 
+    
+    # Handle error message passed from logout/index redirects
+    error_message = request.args.get('error', None)
+    return render_template_string(LOGIN_PAGE, error=error_message)
 
 
 @app.route("/login", methods=["POST"])
@@ -162,7 +201,7 @@ def login():
     now = time.time()
 
     # -------------------------
-    # ACTIVE LOCKOUT CHECK
+    # ACTIVE LOCKOUT CHECK (Existing)
     # -------------------------
     if ip in lockout_until and now < lockout_until[ip]:
         remaining = int(lockout_until[ip] - now)
@@ -175,11 +214,12 @@ def login():
     password = request.form.get("password", "")
 
     # =====================================================
-    # SAFE PARAMETERIZED QUERY — SQLi FIX
+    # SAFE PARAMETERIZED QUERY — SQLi FIX (Existing)
     # =====================================================
     query = """
         SELECT id, username, password FROM users
-        WHERE username = ? AND password = ?;
+        WHERE username = ?
+        AND password = ?;
     """
 
     conn = sqlite3.connect(DB_PATH)
@@ -193,7 +233,7 @@ def login():
         return render_template_string(LOGIN_PAGE, error=f"Database error: {e}")
 
     # -------------------------
-    # LOGIN FAILED
+    # LOGIN FAILED (Existing)
     # -------------------------
     if row is None:
         failed_attempts[ip] = failed_attempts.get(ip, 0) + 1
@@ -206,9 +246,37 @@ def login():
         return render_template_string(LOGIN_PAGE, error="Invalid credentials.")
 
     # -------------------------
-    # LOGIN SUCCESS
+    # LOGIN SUCCESS (Modified for Sessions)
     # -------------------------
     failed_attempts[ip] = 0
+    
+    # Store username and last activity time in the session
+    session['username'] = row[1]
+    session['last_activity'] = now
+    
+    # Redirect to the dashboard
+    conn.close()
+    return redirect(url_for('dashboard'))
+
+
+@app.route("/dashboard", methods=["GET"])
+def dashboard():
+    # -------------------------
+    # SESSION AND TIMEOUT CHECK (New)
+    # -------------------------
+    if not 'username' in session:
+        # Not logged in, redirect to index with an error message
+        return redirect(url_for('index', error="Please log in to view the vault."))
+
+    if check_session_timeout():
+        # Timed out, redirect to logout with timeout message flag
+        return redirect(url_for('logout', timeout=1)) 
+        
+    # -------------------------
+    # DISPLAY DASHBOARD (Moved from old login success)
+    # -------------------------
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
 
     cur.execute("SELECT id, username, password FROM users;")
     users = cur.fetchall()
@@ -220,14 +288,29 @@ def login():
 
     return render_template_string(
         DASHBOARD_PAGE,
-        username=row[1],
+        username=session['username'],
         users=users,
         secrets=secrets
     )
 
 
+@app.route("/logout")
+def logout():
+    is_timeout = request.args.get('timeout') == '1'
+    
+    # Clear the session data
+    session.clear() 
+    
+    error_message = None
+    if is_timeout:
+        error_message = "Session timed out due to 15 minutes of inactivity. Please log in again."
+        
+    # Redirect to the index page, which will render LOGIN_PAGE with the error message
+    return redirect(url_for('index', error=error_message))
+
+
 # ======================================================
-# MAIN
+# MAIN (Unchanged)
 # ======================================================
 if __name__ == "__main__":
     init_db()
