@@ -2,6 +2,8 @@ import os
 import sqlite3
 import time
 from flask import Flask, request, render_template_string, session, redirect, url_for
+from werkzeug.security import generate_password_hash, check_password_hash
+
 
 DB_PATH = "vuln_demo.db"
 app = Flask(__name__)
@@ -23,11 +25,12 @@ LOCKOUT_DURATION = 1800    # 30 minutes
 
 
 # ======================================================
-# DATABASE SETUP (Unchanged)
+# DATABASE SETUP (Fix: Indentation corrected)
 # ======================================================
 def init_db():
     # If the database exists, delete it to ensure clean testing environment 
-    # and consistent seeding. (Remove this for production use)
+    # and consistent seeding.
+    # (Remove this for production use) 
     if os.path.exists(DB_PATH):
         os.remove(DB_PATH) 
 
@@ -39,20 +42,32 @@ def init_db():
     CREATE TABLE users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL,
-                password TEXT NOT NULL
+         
+        password TEXT NOT NULL
             );
     """)
 
     # Seed demo users
-    cur.execute("INSERT INTO users (username, password) VALUES ('alice', 'password123');")
-    cur.execute("INSERT INTO users (username, password) VALUES ('bob', 'hunter2');")
-    cur.execute("INSERT INTO users (username, password) VALUES ('charlie', 'qwerty');")
+    cur.execute(
+        "INSERT INTO users (username, password) VALUES (?, ?);",
+        ("alice", generate_password_hash("password123"))
+    )
+    cur.execute(
+        "INSERT INTO users (username, password) VALUES (?, ?);",
+        ("bob", generate_password_hash("hunter2"))
+    )
+   
+    cur.execute(
+        "INSERT INTO users (username, password) VALUES (?, ?);",
+        ("charlie", generate_password_hash("qwerty"))
+    )
 
     # Secrets table
     cur.execute("""
             CREATE TABLE secrets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
+       
                 content TEXT NOT NULL
             );
     """)
@@ -64,6 +79,7 @@ def init_db():
         ("HR Confidential Memo", "Complaint filed against DevOps lead."),
         ("Security Investigation #441", "Suspicious outbound traffic on server-13."),
         ("Vendor Negotiation Notes", "CyberLink demanding +18% increase."),
+    
         ("Incident Report", "3-hour outage caused by rogue script."),
         ("Patent Draft", "Cooling method for embedded ARM modules."),
         ("Internal Email Thread", "Project Hurricane moved off Slack."),
@@ -78,29 +94,41 @@ def init_db():
 
 
 # ======================================================
-# SHARED CSS (Unchanged)
+# SHARED CSS (Fix: Added word-break: break-all;)
 # ======================================================
 BASE_CSS = """
 <style>
-    body { background:#e5e9f0; font-family:Segoe UI, Tahoma; }
-    .page-wrapper { min-height:100vh; display:flex; justify-content:center; align-items:center; padding:20px; }
-    .card { width:900px; background:white; border-radius:6px; padding:26px; border:1px solid #d0d7e2; box-shadow:0 8px 18px rgba(0,0,0,0.08); }
+    body { background:#e5e9f0;
+font-family:Segoe UI, Tahoma; }
+    .page-wrapper { min-height:100vh; display:flex; justify-content:center; align-items:center; padding:20px;
+}
+    .card { width:900px; background:white; border-radius:6px; padding:26px; border:1px solid #d0d7e2; box-shadow:0 8px 18px rgba(0,0,0,0.08);
+}
     .card-header { display:flex; gap:14px; align-items:center; }
-    .card-header img { width:60px; height:60px; border-radius:4px; border:1px solid #ccc; }
+    .card-header img { width:60px; height:60px; border-radius:4px;
+border:1px solid #ccc; }
     .card-title { font-size:1.3rem; font-weight:600; margin:0; }
-    .card-subtitle { font-size:0.9rem; color:#666; margin:0; }
+    .card-subtitle { font-size:0.9rem; color:#666;
+margin:0; }
     label { display:block; margin-top:10px; font-size:0.9rem; }
-    input { width:100%; padding:7px; border:1px solid #ccc; border-radius:4px; }
-    button { margin-top:12px; padding:8px 16px; border:none; color:white; border-radius:4px; cursor:pointer; }
+    input { width:100%; padding:7px;
+border:1px solid #ccc; border-radius:4px; }
+    button { margin-top:12px; padding:8px 16px; border:none; color:white; border-radius:4px; cursor:pointer;
+}
     button.login-btn { background:#0078d7; }
-    button.register-btn { background:#28a745; }
+    button.register-btn { background:#28a745;
+}
     button:hover { background:#0063b3; }
-    .error { margin-top:10px; padding:10px; background:#fde7e9; border:1px solid #e81123; color:#a80000; border-radius:4px; }
-    .success { margin-top:10px; padding:10px; background:#e6ffed; border:1px solid #28a745; color:#28a745; border-radius:4px; }
+    .error { margin-top:10px; padding:10px; background:#fde7e9; border:1px solid #e81123; color:#a80000;
+border-radius:4px; }
+    .success { margin-top:10px; padding:10px; background:#e6ffed; border:1px solid #28a745; color:#28a745; border-radius:4px;
+}
     .info-text { font-size:0.85rem; margin-top:10px; color:#555; }
-    table { width:100%; border-collapse:collapse; margin-top:14px; font-size:0.85rem; }
-    th, td { border:1px solid #d0d7e2; padding:6px; text-align:left; }
-    th { background:#f3f5f8; }
+    table { width:100%; border-collapse:collapse; margin-top:14px; font-size:0.85rem;
+}
+    th, td { border:1px solid #d0d7e2; padding:6px; text-align:left; word-break: break-all; }
+    th { background:#f3f5f8;
+}
 </style>
 """
 
@@ -142,7 +170,8 @@ DASHBOARD_PAGE = """
 <div class="card-header">
 <img src="https://media.istockphoto.com/id/1199316627/vector/confidential-file-information.jpg?s=612x612&w=0&k=20&c=1NgVSNZtl5KD1fV7MtU2-Q09ssYc-Lu3yYITN3zsqL0=">
 <div><p class="card-title">Access granted</p>
-<p>Welcome, {{ username }}. <a href="/logout">Logout</a></p></div></div>
+<p>Welcome, {{ username }}.
+ <a href="/logout">Logout</a></p></div></div>
 
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 {% if success %}<div class="success">{{ success }}</div>{% endif %}
@@ -177,7 +206,8 @@ DASHBOARD_PAGE = """
 # ======================================================
 def check_session_timeout():
     """
-    Checks if the user session has timed out due to inactivity (15 mins).
+    Checks if the user session has timed 
+ out due to inactivity (15 mins).
     If active, it updates the last_activity time.
     """
     now = time.time()
@@ -189,6 +219,7 @@ def check_session_timeout():
     
     # If the session is active and not timed out, update the last activity time
     if 'username' in session:
+       
         session['last_activity'] = now
     
     return False
@@ -211,7 +242,8 @@ def password_meets_policy(pw: str) -> bool:
 @app.route("/", methods=["GET"])
 def index():
     if 'username' in session:
-        # Check if the user is already logged in and if the session has timed out
+        # Check if the user is already logged in and if the 
+        # session has timed out
         if check_session_timeout():
             return redirect(url_for('logout', timeout=1))
         
@@ -225,11 +257,12 @@ def index():
     return render_template_string(LOGIN_PAGE, error=error_message, success=success_message)
 
 
-@app.route("/register", methods=["POST"])
+@app.route("/register", 
+methods=["POST"])
 def register():
     """
     Handles new user registration and enforces the password policy.
-    REQUIRES A USER TO BE LOGGED IN to proceed.
+ REQUIRES A USER TO BE LOGGED IN to proceed.
     """
     
     # --- ACCESS CONTROL: MUST BE LOGGED IN ---
@@ -242,6 +275,7 @@ def register():
     # 1. Check Password Policy
     policy_error_msg = "Registration failed: Password does not meet the policy."
     if not password_meets_policy(password):
+   
         return redirect(url_for('dashboard', error=policy_error_msg))
 
     conn = sqlite3.connect(DB_PATH)
@@ -252,17 +286,23 @@ def register():
     if cur.fetchone():
         conn.close()
         return redirect(url_for('dashboard', error=f"Registration failed: Username '{username}' already exists."))
-
-    # 3. Create User (Policy met)
+    # 3. Create User (Policy met) - store hashed password
     try:
-        cur.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
+        hashed_password = generate_password_hash(password)
+    
+        cur.execute(
+            "INSERT INTO users (username, password) VALUES (?, ?)",
+            (username, hashed_password)
+        )
         conn.commit()
         conn.close()
         success_msg = f"User '{username}' created successfully and added to the database."
         return redirect(url_for('dashboard', success=success_msg))
     except sqlite3.Error as e:
+     
         conn.close()
         return redirect(url_for('dashboard', error=f"Database error during registration: {e}"))
+
 
 
 @app.route("/login", methods=["POST"])
@@ -277,6 +317,7 @@ def login():
         remaining = int(lockout_until[ip] - now)
         return render_template_string(
             LOGIN_PAGE,
+       
             error=f"Too many failed attempts. Try again in {remaining // 60} minutes."
         )
 
@@ -288,49 +329,57 @@ def login():
         return render_template_string(LOGIN_PAGE, error="Password does not meet policy.")
 
     # =====================================================
-    # SAFE PARAMETERIZED QUERY — SQLi FIX (Existing)
+    # SAFE PARAMETERIZED QUERY — WITH HASHED PASSWORDS
     # =====================================================
     query = """
+   
         SELECT id, username, password FROM users
-        WHERE username = ?
-        AND password = ?;
+        WHERE username = ?;
     """
 
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
     try:
-        cur.execute(query, (username, password))    # SAFE
+        cur.execute(query, (username,))
         row = cur.fetchone()
+
     except sqlite3.Error as e:
         conn.close()
         return render_template_string(LOGIN_PAGE, error=f"Database error: {e}")
 
     # -------------------------
-    # LOGIN FAILED (Existing)
+    # LOGIN FAILED OR WRONG PASSWORD
     # -------------------------
-    if row is None:
+    login_ok = False
+    if row is not None:
+     
+        stored_hash = row[2]  # hashed password from DB
+        if check_password_hash(stored_hash, password):
+            login_ok = True
+
+    if not login_ok:
         failed_attempts[ip] = failed_attempts.get(ip, 0) + 1
 
         if failed_attempts[ip] >= MAX_ATTEMPTS:
             lockout_until[ip] = now + LOCKOUT_DURATION
             failed_attempts[ip] = 0
 
+     
         conn.close()
         return render_template_string(LOGIN_PAGE, error="Invalid credentials.")
 
     # -------------------------
-    # LOGIN SUCCESS (Modified for Sessions)
+    # LOGIN SUCCESS (with hashed passwords)
     # -------------------------
     failed_attempts[ip] = 0
-    
-    # Store username and last activity time in the session
+
     session['username'] = row[1]
     session['last_activity'] = now
-    
-    # Redirect to the dashboard
+
     conn.close()
     return redirect(url_for('dashboard'))
+
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -339,7 +388,8 @@ def dashboard():
     # SESSION AND TIMEOUT CHECK (New)
     # -------------------------
     if not 'username' in session:
-        # Not logged in, redirect to index with an error message
+        # Not logged 
+        # in, redirect to index with an error message
         return redirect(url_for('index', error="Please log in to view the vault."))
 
     if check_session_timeout():
@@ -350,7 +400,7 @@ def dashboard():
     # DISPLAY DASHBOARD (Moved from old login success)
     # -------------------------
     conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
+    cur = conn.cursor() # <-- FIX: Completed statement on one line
 
     cur.execute("SELECT id, username, password FROM users;")
     users = cur.fetchall()
@@ -369,6 +419,7 @@ def dashboard():
         username=session['username'],
         users=users,
         secrets=secrets,
+ 
         error=error_message,
         success=success_message
     )
@@ -383,7 +434,8 @@ def logout():
     
     error_message = None
     if is_timeout:
-        error_message = "Session timed out due to 15 minutes of inactivity. Please log in again."
+        error_message = "Session timed out due to 15 minutes of inactivity.\
+ Please log in again." # <-- FIX: Backslash added for string continuation
         
     # Redirect to the index page, which will render LOGIN_PAGE with the error message
     return redirect(url_for('index', error=error_message))
