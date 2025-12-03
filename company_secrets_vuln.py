@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import time
+from datetime import datetime
 from flask import Flask, request, render_template_string, session, redirect, url_for
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -22,6 +23,37 @@ failed_attempts = {}      # { ip: count }
 lockout_until = {}        # { ip: timestamp }
 MAX_ATTEMPTS = 5
 LOCKOUT_DURATION = 1800    # 30 minutes
+
+
+# ======================================================
+# ACCESS LOGGING HELPER
+# ======================================================
+def log_access(username, action, ip_address, status, details=""):
+    """
+    Logs access attempts and actions to the database.
+    
+    Args:
+        username: Username attempting access (or "N/A" if not applicable)
+        action: Type of action (e.g., "LOGIN_ATTEMPT", "LOGIN_SUCCESS", "LOGOUT", "REGISTER", "VIEW_DASHBOARD")
+        ip_address: IP address of the requester
+        status: Status of the action (e.g., "SUCCESS", "FAILED", "LOCKED_OUT")
+        details: Additional details about the action
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    try:
+        cur.execute(
+            "INSERT INTO access_logs (timestamp, username, action, ip_address, status, details) VALUES (?, ?, ?, ?, ?, ?)",
+            (timestamp, username, action, ip_address, status, details)
+        )
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"[!] Error logging access: {e}")
+    finally:
+        conn.close()
 
 
 # ======================================================
@@ -88,6 +120,19 @@ def init_db():
 
     cur.executemany("INSERT INTO secrets (title, content) VALUES (?, ?)", secrets)
 
+    # Access logs table
+    cur.execute("""
+        CREATE TABLE access_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            username TEXT NOT NULL,
+            action TEXT NOT NULL,
+            ip_address TEXT NOT NULL,
+            status TEXT NOT NULL,
+            details TEXT
+        );
+    """)
+
     conn.commit()
     conn.close()
     print("[+] Database initialized.")
@@ -129,6 +174,13 @@ border-radius:4px; }
     th, td { border:1px solid #d0d7e2; padding:6px; text-align:left; word-break: break-all; }
     th { background:#f3f5f8;
 }
+    .log-entry { font-size:0.8rem; }
+    .status-success { color:#28a745; font-weight:600; }
+    .status-failed { color:#e81123; font-weight:600; }
+    .status-locked { color:#ff8c00; font-weight:600; }
+    .nav-links { margin-top:15px; padding-top:15px; border-top:1px solid #d0d7e2; }
+    .nav-links a { margin-right:15px; color:#0078d7; text-decoration:none; }
+    .nav-links a:hover { text-decoration:underline; }
 </style>
 """
 
@@ -198,6 +250,61 @@ DASHBOARD_PAGE = """
 <label>New Password</label><input type="password" name="password">
 <button type="submit" class="register-btn">Register</button>
 </form>
+
+<div class="nav-links">
+<a href="/access-logs">View Access Logs</a>
+</div>
+
+</div></div></body></html>
+"""
+
+ACCESS_LOGS_PAGE = """
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Access Logs</title>""" + BASE_CSS + """</head>
+<body>
+<div class="page-wrapper"><div class="card">
+
+<div class="card-header">
+<img src="https://media.istockphoto.com/id/1199316627/vector/confidential-file-information.jpg?s=612x612&w=0&k=20&c=1NgVSNZtl5KD1fV7MtU2-Q09ssYc-Lu3yYITN3zsqL0=">
+<div><p class="card-title">Access Logs</p>
+<p class="card-subtitle">System access and authentication logs</p></div></div>
+
+<h2>Recent Access Activity</h2>
+<table class="log-entry">
+<tr>
+<th>Timestamp</th>
+<th>Username</th>
+<th>Action</th>
+<th>IP Address</th>
+<th>Status</th>
+<th>Details</th>
+</tr>
+{% for log in logs %}
+<tr>
+<td>{{ log[1] }}</td>
+<td>{{ log[2] }}</td>
+<td>{{ log[3] }}</td>
+<td>{{ log[4] }}</td>
+<td>
+{% if log[5] == 'SUCCESS' %}
+<span class="status-success">{{ log[5] }}</span>
+{% elif log[5] == 'FAILED' %}
+<span class="status-failed">{{ log[5] }}</span>
+{% elif log[5] == 'LOCKED_OUT' %}
+<span class="status-locked">{{ log[5] }}</span>
+{% else %}
+{{ log[5] }}
+{% endif %}
+</td>
+<td>{{ log[6] if log[6] else '-' }}</td>
+</tr>
+{% endfor %}
+</table>
+
+<div class="nav-links">
+<a href="/dashboard">Back to Dashboard</a> | <a href="/logout">Logout</a>
+</div>
+
 </div></div></body></html>
 """
 
@@ -267,6 +374,7 @@ def register():
     
     # --- ACCESS CONTROL: MUST BE LOGGED IN ---
     if not 'username' in session:
+        log_access("N/A", "REGISTER_ATTEMPT", request.remote_addr, "FAILED", "Not logged in")
         return redirect(url_for('index', error="You must be logged in to add a new user."))
     
     username = request.form.get("username", "")
@@ -275,7 +383,7 @@ def register():
     # 1. Check Password Policy
     policy_error_msg = "Registration failed: Password does not meet the policy."
     if not password_meets_policy(password):
-   
+        log_access(session['username'], "REGISTER_ATTEMPT", request.remote_addr, "FAILED", f"Password policy violation for username: {username}")
         return redirect(url_for('dashboard', error=policy_error_msg))
 
     conn = sqlite3.connect(DB_PATH)
@@ -285,6 +393,7 @@ def register():
     cur.execute("SELECT id FROM users WHERE username = ?", (username,))
     if cur.fetchone():
         conn.close()
+        log_access(session['username'], "REGISTER_ATTEMPT", request.remote_addr, "FAILED", f"Username already exists: {username}")
         return redirect(url_for('dashboard', error=f"Registration failed: Username '{username}' already exists."))
     # 3. Create User (Policy met) - store hashed password
     try:
@@ -296,11 +405,12 @@ def register():
         )
         conn.commit()
         conn.close()
+        log_access(session['username'], "REGISTER", request.remote_addr, "SUCCESS", f"Created new user: {username}")
         success_msg = f"User '{username}' created successfully and added to the database."
         return redirect(url_for('dashboard', success=success_msg))
     except sqlite3.Error as e:
-     
         conn.close()
+        log_access(session['username'], "REGISTER_ATTEMPT", request.remote_addr, "FAILED", f"Database error: {e}")
         return redirect(url_for('dashboard', error=f"Database error during registration: {e}"))
 
 
@@ -315,6 +425,7 @@ def login():
     # -------------------------
     if ip in lockout_until and now < lockout_until[ip]:
         remaining = int(lockout_until[ip] - now)
+        log_access(request.form.get("username", "N/A"), "LOGIN_ATTEMPT", ip, "LOCKED_OUT", f"{remaining} seconds remaining")
         return render_template_string(
             LOGIN_PAGE,
        
@@ -326,10 +437,11 @@ def login():
 
     # --- Basic Password Policy Check on Login Attempt ---
     if not password_meets_policy(password):
+        log_access(username, "LOGIN_ATTEMPT", ip, "FAILED", "Password does not meet policy")
         return render_template_string(LOGIN_PAGE, error="Password does not meet policy.")
 
     # =====================================================
-    # SAFE PARAMETERIZED QUERY — WITH HASHED PASSWORDS
+    # SAFE PARAMETERIZED QUERY FOR LOGIN — 
     # =====================================================
     query = """
    
@@ -346,6 +458,7 @@ def login():
 
     except sqlite3.Error as e:
         conn.close()
+        log_access(username, "LOGIN_ATTEMPT", ip, "FAILED", f"Database error: {e}")
         return render_template_string(LOGIN_PAGE, error=f"Database error: {e}")
 
     # -------------------------
@@ -364,8 +477,10 @@ def login():
         if failed_attempts[ip] >= MAX_ATTEMPTS:
             lockout_until[ip] = now + LOCKOUT_DURATION
             failed_attempts[ip] = 0
+            log_access(username, "LOGIN_ATTEMPT", ip, "LOCKED_OUT", f"Account locked after {MAX_ATTEMPTS} failed attempts")
+        else:
+            log_access(username, "LOGIN_ATTEMPT", ip, "FAILED", f"Invalid credentials (Attempt {failed_attempts[ip]}/{MAX_ATTEMPTS})")
 
-     
         conn.close()
         return render_template_string(LOGIN_PAGE, error="Invalid credentials.")
 
@@ -376,6 +491,8 @@ def login():
 
     session['username'] = row[1]
     session['last_activity'] = now
+
+    log_access(row[1], "LOGIN", ip, "SUCCESS", "User successfully authenticated")
 
     conn.close()
     return redirect(url_for('dashboard'))
@@ -410,6 +527,9 @@ def dashboard():
 
     conn.close()
 
+    # Log dashboard access
+    log_access(session['username'], "VIEW_DASHBOARD", request.remote_addr, "SUCCESS", "Accessed dashboard")
+
     # Pass error/success messages from registration attempts to the dashboard template
     error_message = request.args.get('error', None)
     success_message = request.args.get('success', None)
@@ -425,9 +545,45 @@ def dashboard():
     )
 
 
+@app.route("/access-logs", methods=["GET"])
+def access_logs():
+    # -------------------------
+    # SESSION AND TIMEOUT CHECK
+    # -------------------------
+    if not 'username' in session:
+        return redirect(url_for('index', error="Please log in to view access logs."))
+
+    if check_session_timeout():
+        return redirect(url_for('logout', timeout=1))
+    
+    # -------------------------
+    # RETRIEVE ACCESS LOGS
+    # -------------------------
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    # Get all logs, most recent first
+    cur.execute("SELECT * FROM access_logs ORDER BY id DESC LIMIT 100;")
+    logs = cur.fetchall()
+
+    conn.close()
+
+    # Log access to logs page
+    log_access(session['username'], "VIEW_ACCESS_LOGS", request.remote_addr, "SUCCESS", "Viewed access logs")
+
+    return render_template_string(
+        ACCESS_LOGS_PAGE,
+        logs=logs
+    )
+
+
 @app.route("/logout")
 def logout():
     is_timeout = request.args.get('timeout') == '1'
+    
+    # Log logout before clearing session
+    if 'username' in session:
+        log_access(session['username'], "LOGOUT", request.remote_addr, "SUCCESS", "User logged out" + (" (timeout)" if is_timeout else ""))
     
     # Clear the session data
     session.clear() 
